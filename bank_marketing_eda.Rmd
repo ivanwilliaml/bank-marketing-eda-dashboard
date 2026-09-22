@@ -1,0 +1,640 @@
+---
+title: "FinalExam-2802461776-Ivan William Lianata"
+author: "Ivan William Lianata"
+date: "2025-06-20"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    highlight: tango
+    code_folding: hide
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE,fig.height=5,fig.width=7,dev="png")
+
+#Library Activation
+#install.packages("reshape2")
+#install.packages("scales")
+#install.packages("e1071")
+
+library(dplyr)
+library(ggplot2)
+library(plotly)
+library(shiny)
+library(e1071)
+library(tidyr)
+library(DT)
+library(reshape2)
+library(scales)
+```
+
+**Video Explanation:** https://youtu.be/otPNh2EFumU?si=lvPLAaDkG7ILPGka
+
+
+# Final Exam Report{.tabset}
+
+## 1. Data Quality And Preprocessing
+In this section, we will carry out three key steps to prepare our dataset for analysis: identifying data quality issues, cleaning the data based on our findings, and performing an initial summary to understand the key patterns. These steps correspond to parts (a), (b), and (c) of the task.
+
+### 1a. Identifying Data Quality Issues
+
+First, we will load the dataset, and explore to uncover, duplicate, missing value, irrelevant, inconsistent, outliers in the data.
+```{r identifying_data}
+#getwd()
+#setwd("C:/Users/hp/Documents/R_Studio/2802461776")
+df<-read.csv('data_C.csv')
+
+# Convert All Categorical Variable as Factor
+categorical_col<-df %>% select_if(is.character)%>%names() 
+
+for (x in categorical_col){
+  df[[x]] <- as.factor(df[[x]])
+  }
+
+# Get All Numeric Variable
+numeric_col<- df%>% select(where(is.numeric))%>%names()
+
+output<-c()
+# 1.Check Missing Values
+output<-c(output, "=== Missing Values per Column ===", capture.output(colSums(is.na(df))))
+
+# 2.Check for Complete Duplicated Rows (Without Index(X))
+output<-c(output, "", "=== Total Number of Duplicate Rows (without X) ===",capture.output(sum(duplicated(df[, -1]))))
+
+# 3.Check for Inconsistent or Unknown Categories
+for(col_name in categorical_col){
+  output<-c(output, paste0("\nUnique Values for '", col_name, "':"))
+  output<-c(output, capture.output(table(df[[col_name]], useNA ="ifany")))
+}
+
+# 4.Check for Outliers or Extreme Values
+# 4a. Skewness
+skew_vals <- sapply(df[numeric_col], skewness, na.rm=T)
+output<-c(output, "", "=== Skewness of Numerical Columns ===",capture.output(skew_vals))
+
+# 4b. Outlier Count using 3*IQR Rule
+count_outliers <-function(x){
+  Q1 <-quantile(x, 0.25, na.rm=T)
+  Q3 <-quantile(x, 0.75, na.rm=T)
+  IQR <-Q3-Q1
+  lower <-Q1-3*IQR
+  upper <-Q3+3*IQR
+  sum(x<lower | x>upper, na.rm=T)
+}
+outlier_counts<-sapply(df[numeric_col], count_outliers)
+output<-c(output, "", "=== Outlier Count per Numerical Column ===", capture.output(outlier_counts))
+
+# 4.c Visualization for The Outlier
+output<-c(output, "", "=== 4c. Boxplot of Numerical Variables ===")
+
+df%>%
+  select(all_of(numeric_col))%>%
+  pivot_longer(everything(),names_to = "Variable", values_to = "Value") %>%
+  ggplot(aes(x = Variable, y= Value))+
+  geom_boxplot(fill="lightblue", outlier.colour="red", outlier.shape=8) +
+  labs(title ="Boxplot of Numerical Variables",x="Variable", y="Value") +
+  theme_minimal() +
+  theme(axis.text.x=element_text(angle = 45, hjust = 1),plot.title = element_text(hjust = 0.5, face = "bold"))
+
+
+# 5. Get Noisy & Irrelevant Value Using Summary 
+output<-c(output, "", "=== Overall Summary ===",capture.output(summary(df)))
+
+# Print the full combined output
+cat(paste(output, collapse="\n"))
+
+```
+**Summary of Findings:**  
+Based on the output from the code chunk above, we can identify the following issues:
+
+1. **Missing Values:**  
+There are missing values in the duration and job columns. In job, some entries are empty ("").
+Several other columns also have "unknown" values, which means the data is incomplete, including: marital, education, default, housing, and loan.
+
+2. **Duplicate Records:** 
+The data contains 1 duplicated row.
+
+3. **Outliers or Extreme Values:**   
+Some numeric columns have very high values:
+  - `"duration"`: has a maximum of 3284, while the median is only 183 → this is an extreme outlier.
+  - `"campaign"`: maximum value is 43, which seems unrealistic.
+  - `"pdays"`: many values are 999, which is used as a placeholder.
+  - `"previous"`: is skewed but the values are still reasonable, so it’s not a big issue.
+
+4. **Inconsistent Categories:**   
+In the job column, one of the values is written as "admin." (with a dot), while the rest don’t have a dot. This makes the category inconsistent.
+
+5. **Irrelevant Values:**   
+The value 999 in the pdays column does not represent a real number. It is used to mark clients who were never contacted before, so it's considered irrelevant in its current form.
+
+
+### 1b. Handling Data Issues
+
+**Cleaning Decisions:**
+
+1. **Remove Duplicated Rows:**  
+   All duplicated rows were removed to avoid double counting and ensure each observation is unique.
+
+2. **Handle Outliers:**  
+   Extreme values were capped using the boxplot rule (3 × IQR).  
+   This method was chosen because several numeric variables had high skewness (skewness values between 3–4).
+
+3. **Handle Missing Values:**
+   - For numeric variables, missing values were imputed using the **median**, which is more robust for skewed distributions.
+   - For `job`, missing values were replaced with `"other"`.
+
+4. **Recode Inconsistent Job Categories:**
+   Similar job titles were grouped into broader categories to reduce fragmentation and improve interpretability:
+   - `"admin."`, `"management"`, `"technician"` → **white-collar**
+   - `"blue-collar"`, `"services"`, `"housemaid"` → **blue-collar**
+   - `"entrepreneur"`, `"self-employed"` → **self-employed**
+   - `"student"` → **student**
+   - `"retired"`, `"unemployed"` → **non-working**
+
+   Logical adjustments were also applied:
+   - If `job == "other"` and `age > 60`, then recoded as **non-working**
+   - If education level is **high**, recoded as **white-collar**
+   - If education level is **low**, recoded as **blue-collar**
+
+5. **Handle "unknown" Values in Categorical Columns:**
+   - `education == "unknown"`: grouped by `job`, and filled with the **mode** of each job group.
+   - `marital == "unknown"`: replaced with `"married"` (most common value).
+   - `housing == "unknown"`: replaced with `"yes"` (mode).
+   - `loan == "unknown"`: replaced with `"no"` (mode).
+
+6. **Create Derived Variable – `ever_contacted`:**  
+   A new variable `ever_contacted` was created to simplify interpretation:
+   - If `pdays == 999`, then `ever_contacted = "no"`  
+   - Otherwise, `ever_contacted = "yes"`
+
+```{r handling_data}
+output2<-c()
+
+# 1.Remove Duplicated Row
+df <-df[!duplicated(df[,-1]),]
+
+# 2.Handle Outlier Using Capping
+capping_outlier<-function(col){
+  Q1<-quantile(col,0.25, na.rm=T)
+  Q3<-quantile(col,0.75, na.rm=T)
+  IQR_value<-Q3-Q1 
+  
+  lower_bound <- max(Q1-(3*IQR_value),min(col, na.rm=T))
+  upper_bound <- Q3 + (3 * IQR_value)
+  
+  col <- ifelse(is.na(col), NA,  #biarkan NA
+                ifelse(col < lower_bound, lower_bound,
+                       ifelse(col > upper_bound, upper_bound, col)))
+  return(col)
+}
+df<-df %>% mutate(across(c(campaign, duration), capping_outlier))
+
+# 3. Filling NA Value With Median (skew)
+df$duration[is.na(df$duration)] <-median(df$duration, na.rm=T)
+
+# 4.Handle Inconsistent Data + Missing Value For Job (other)
+
+# 4.a Job
+df<-df%>%
+  mutate(job= case_when(
+    job %in% c("admin.", "management", "technician") ~ "white-collar",
+    job %in% c("blue-collar", "services", "housemaid") ~ "blue-collar",
+    job %in% c("entrepreneur", "self-employed") ~ "self-employed",
+    job == "student" ~ "student",
+    job %in% c("retired", "unemployed") ~ "non-working",
+    TRUE ~ "other"
+  ))
+
+df<-df%>%
+  mutate(job = case_when(
+    job=="other" & age >= 60 ~ "non-working",
+    job=="other" & education %in% c("university.degree", "professional.course") ~ "white-collar",
+    job=="other" & education %in% c("basic.4y", "basic.6y", "basic.9y", "high.school","unknown") ~ "blue-collar",
+    TRUE ~ job
+  ))
+df$job<-as.factor(df$job)
+
+# 4.b Education
+df<-df %>%
+  mutate(education = case_when(
+    education %in% c("basic.4y", "basic.6y", "illiterate") ~ "primary school",
+    education == "basic.9y" ~ "middle school",
+    education == "high.school" ~ "high school",
+    education %in% c("professional.course", "university.degree") ~ "higher education",
+    TRUE ~ "unknown"  # fallback
+  ))
+
+education_mode<-df%>%
+  filter(education != "unknown")%>%
+  group_by(job, education)%>%
+  summarise(n = n(), .groups = "drop")%>%
+  arrange(job, desc(n))%>%
+  group_by(job)%>%
+  slice(1)%>%
+  select(job, mode_education = education)
+
+output2<-c(output2, "=== Education Mode Based on Job ===", capture.output(education_mode))
+
+df$education[df$education == "unknown" & df$job == "blue-collar"] <- "primary school"
+df$education[df$education == "unknown" & df$job == "non-working"] <- "higher education"
+df$education[df$education == "unknown" & df$job == "self-employed"] <- "higher education"
+df$education[df$education == "unknown" & df$job == "student"] <- "high school"
+df$education[df$education == "unknown" & df$job == "white-collar"] <- "higher education"
+df$education<-as.factor(df$education)
+
+# 4.c Marital, Loan, Housing (Using Mode)
+df$marital[df$marital=="unknown"]<-"married"
+df$housing[df$housing=="unknown"]<-"yes"
+df$loan[df$loan=="unknown"]<-"no"
+
+# 5.Handling Irrelevant Value by Imputing Into Ever Contacted
+df<-df%>%
+  mutate(ever_contacted= ifelse(pdays==999, "no", "yes"))
+df$ever_contacted<-as.factor(df$ever_contacted)
+
+# Create a cleaned version of the dataset called clean_data
+write.csv(df, "clean_data.csv", row.names=FALSE)
+clean_data<-read.csv("clean_data.csv",stringsAsFactors=TRUE)
+
+output2<- c(output2, "", "=== Clean Data Summary ===", capture.output(summary(clean_data)))
+cat(paste(output2, collapse = "\n"))
+```
+**Create Cleaned Version of Data:**`"clean_data"`
+
+
+### 1c. Summary Statistics and Initial Exploration
+
+This part provides summary statistics for the numerical variablles, as well as a grouped summary table to compare one variable across different categories.
+
+**Summary for Numerical Columns:**
+```{r summary_statistic}
+vars <-c("age","duration","campaign","previous")
+
+get_mode <- function(x) {
+  uniqx <- na.omit(unique(x))
+  uniqx[which.max(tabulate(match(x, uniqx)))]
+}
+
+summary_stats <- data.frame(
+  Variable = vars,
+  Mean     = sapply(clean_data[vars], mean, na.rm=T),
+  Median   = sapply(clean_data[vars], median, na.rm=T),
+  Mode     = sapply(clean_data[vars], get_mode),
+  SD       = sapply(clean_data[vars], sd, na.rm =T),
+  Variance = sapply(clean_data[vars], var, na.rm =T),
+  IQR      = sapply(clean_data[vars], IQR, na.rm =T),
+  Range    = sapply(clean_data[vars], function(x) diff(range(x, na.rm=T)))
+)
+
+datatable(summary_stats,caption = "Summary Statistics of Numerical Variables",rownames=F,options = list(pageLength = 5, scrollX=T))
+```
+
+Client average `age` is around **40 years**. Then, the average call `duration` is approximately **252s**, but it is highly skewed, with many calls lasting much longer. 
+Clients were contacted on average **2.4 times** `campaign`, indicating possible over-contacting in some cases.
+  
+    
+
+
+**Initial Exploration**   
+**Note:** ***This visualization uses Shiny, so it must be run manually to function properly.***
+```{r initial_exploration}
+categorical_cols<-clean_data %>% select(where(is.factor)) %>% names()
+numeric_cols<-clean_data %>% select(where(is.numeric)) %>% names()
+
+summary_by_cat_num<-function(cat_var,num_var){
+  clean_data%>%
+    group_by(.data[[cat_var]])%>%
+    summarise(
+      Count=n(),
+      Mean =round(mean(.data[[num_var]], na.rm =T), 2),
+      Median =round(median(.data[[num_var]], na.rm =T), 2),
+      Min =round(min(.data[[num_var]], na.rm =T), 2),
+      Max =round(max(.data[[num_var]], na.rm =T), 2)
+    ) %>%
+    rename(!!cat_var := 1)
+}
+
+summary_tables<-list()
+for (cat in categorical_cols){
+  for (num in numeric_cols){
+    tbl <- summary_by_cat_num(cat, num)
+    summary_tables[[paste0(num, "_by_", cat)]] <- tbl
+  }
+}
+```
+
+```{r interactive_ui, echo=FALSE, message=FALSE, warning=FALSE}
+inputPanel(
+  selectInput("selected_cat_var",label ="Choose a Categorical Variable:",choices =categorical_cols),
+  selectInput("selected_num_var",label ="Choose a Numerical Variable:",choices =numeric_cols)
+)
+```
+
+```{r interactive_server, echo=FALSE, message=FALSE, warning=FALSE}
+renderDataTable({
+  req(input$selected_cat_var,input$selected_num_var)
+  
+  cat_var <- input$selected_cat_var
+  num_var <- input$selected_num_var
+  summary_by_cat_num(cat_var,num_var)
+}, options = list(pageLength =10, searching=FALSE,lengthChange =FALSE))
+```
+
+
+## 2. Relationship Analysis
+
+### 2a. Explore Variable Relationships
+
+By the data, there are three variabel that may influence the campaign outcome `"y"`, there are:   
+  - "`duration`": Since the correlation is quite strong (0.43)    
+  - "`poutcome`": **60%** of previous success client,are becoming client again.   
+  - "`job`": **Student and Non-working** are more potential becoming client that other job.
+
+#### Correlation Matrix for Numeric Variable
+```{r correlation_matrix}
+corr_matrix<-clean_data%>%
+  mutate(y_numeric=ifelse(y== "yes", 1, 0))%>%
+  select(age,duration,campaign,previous,y_numeric)%>%
+  cor(use ="complete.obs")%>%
+  round(2)
+
+ggplot(melt(corr_matrix), aes(x=Var1, y=Var2, fill=value))+
+  geom_tile(color = "white")+
+  geom_text(aes(label = value), size = 4)+
+  scale_fill_gradient2(low = "blue",mid = "white",high= "red",midpoint=0,limits = c(-1, 1),name = "Corr")+
+  theme_minimal() +
+  labs(title = "Correlation Heatmap",x=NULL, y=NULL)+
+  theme(axis.text.x = element_text(angle=45, hjust=1),plot.title =element_text(hjust=0.5, face = "bold"))
+```
+
+
+`"Duration"` has a **positive correlation (0.43)** with y_numeric, which represents whether a client says yes.
+This means that **longer conversations are more likely to lead to a positive response** from the client.
+So, as the duration increases, the chance that the client agrees also increases.
+
+
+#### Cross Tabulation Job & Campagin Result 
+```{r}
+crosstabulation<-function(x1, x2, data){
+  tab<-table(data[[x1]], data[[x2]])
+  prop<-prop.table(tab, margin = 1) * 100
+  result<-matrix(paste0(tab," (", round(prop, 1), "%)"),nrow=nrow(tab),dimnames=dimnames(tab))
+  
+  cross_tab<- as.data.frame.matrix(result)
+  cross_tab<-tibble::rownames_to_column(cross_tab, var=x1)
+  
+  datatable(cross_tab,rownames = FALSE,
+    caption = paste("Cross-tabulation of", x1, "and", x2),
+    options = list(dom = 't', pageLength = 5)
+  )
+  }
+
+crosstabulation("job", "y", clean_data)
+```
+
+The client's profession appears to affect the decision. For example, **students** say “yes” the most **(26.5%)**, while **blue-collar workers** say “yes” the least **(7.1%)**.
+This suggests that a **client’s job may influence how likely they are to accept the offer.**
+
+
+#### Previos Outcome And Campagin Result(y)
+```{r}
+crosstabulation("poutcome", "y", clean_data)
+```
+
+There is a clear relationship between **previous outcomes** and campaign successness. When the previous outcome was **success**, **61.3%** of clients said “yes”. 
+But if it was **failure**, only **15.5%** said “yes”, and if it was **nonexistent**, just **8.9%**.
+
+### 2b. Feature Engineering
+
+These are the summary of the new variable, that have been created from another variable:
+```{r feature_engineering}
+clean_data$age_group<-cut(clean_data$age,
+  breaks = c(0, 29, 50, 100),
+  labels = c("<30", "30–50", ">50"))
+
+clean_data$recency_level <- case_when(
+  clean_data$pdays == 999 ~ "never",
+  clean_data$pdays <= 7 ~ "recent",
+  TRUE ~ "old"
+)
+
+clean_data$total_contact_score<-clean_data$campaign + clean_data$previous
+
+clean_data$duration_group <- cut(clean_data$duration,
+  breaks =c(0, 104.1, 183.1, 324.1, 1000),
+  labels =c("short", "middle-short","middle-long", "long"),include.lowest=T)
+
+clean_data$recency_level<-as.factor(clean_data$recency_level)
+clean_data$age_group<-as.factor(clean_data$age_group)
+clean_data$duration_group<-as.factor(clean_data$duration_group)
+
+```
+
+```{r}
+output3<-c()
+output3<-c(output3,"", "=== New Variable Summary ===",capture.output(summary(clean_data[, c("age_group", "recency_level", "total_contact_score")])))
+cat(paste(output3,collapse="\n"))
+```
+
+### 2c. Interactive Visualizations
+
+We have made three interactive chart using Plotly, there are:
+
+**1. Chart of Previous Outcome & Campaign Result**    
+Clients are much more likely to respond positively if the previous campaign was successful. The chart shows that over 60% of clients said "yes" after a prior success,
+compared to only around 10–15% for failure or no previous contact. This highlights the strong influence of past campaign outcomes on current conversions.
+```{r interactive_chart1, fig.show='hold'}
+summary1 <-clean_data %>%
+  group_by(poutcome, y) %>%
+  summarise(Count = n(), .groups = "drop") %>%
+  group_by(poutcome) %>%
+  mutate(Percent =round(Count / sum(Count) * 100, 1),y = factor(y, levels = c("yes", "no")))
+
+fill_colors <- c("yes" = "#1bd3c7",       
+                 "no"  = "#e2e2e2")
+
+plot_ly(
+  summary1,
+  x = ~poutcome,
+  y = ~Percent,
+  color = ~y,
+  colors = fill_colors,
+  type = 'bar',
+  text = ~paste0("Outcome: ", y,
+                 "<br>Count: ", Count,
+                 "<br>Percent: ", Percent, "%"),
+  hoverinfo = 'text'
+) %>%
+  layout(
+    barmode = 'stack',
+    title = list(
+    text = "<b style='font-size:18px;'>Prior Wins Boost Conversions 4×</b>",x = 0.5),
+    xaxis = list(title = 'Previous Campaign Outcome'),
+    yaxis = list(title = 'Proportion (%)'),
+    legend = list(title = list(text = 'Campaign Outcome')),
+    margin = list(t= 80,r=20,b = 60,l =50 ))
+
+```
+
+
+**2. Chart of Duration & Campaign Result**
+
+Clients who say "yes" tend to have much longer conversations, with an average duration of **512 seconds**, compared to only **219 seconds** for those who say "no".
+This suggests that **longer calls significantly increase the chance of a successful campaign outcome.**
+
+```{r interactive_chart2, fig.show='hold'}
+summary2<-clean_data%>%
+  group_by(y)%>%
+  summarise(
+    MeanScore=round(mean(duration),2),
+    Count = n(),.groups = "drop")
+
+plot_ly(data = summary2,x= ~y,y= ~MeanScore,type ='bar',
+  text = ~paste0(MeanScore),         
+  textposition = 'outside',           
+  hovertext = ~paste0(
+    "Target Outcome: ", y,
+    "<br>Mean Duration: ", MeanScore,
+    "<br>Count: ", Count),
+  hoverinfo = 'text',
+  marker = list(color = c("salmon", "#1bd3c7")))%>%
+  layout(title = list(text = "<b>Call Duration Doubles on Success</b>",x= 0.5),
+    xaxis =list(title= "Target Outcome (y)"),
+    yaxis =list(title= "Average Contact Duration"),
+    showlegend=FALSE)
+```
+
+
+**3. Chart of Recency Level, Age Group & Campaign Result**
+
+There is a clear **U-shaped pattern**, where **clients under 30 and over 50 consistently have higher success rates than those aged 30–50.**
+Additionally, previous contact matters a lot, **contacts lead to much higher success rates across all age groups.**
+This suggests that **both age and contact strongly impact campaign effectiveness.**
+
+```{r interactive_chart3, fig.show='hold'}
+p<-ggplot(clean_data, aes(x=age_group, fill=y))+
+  geom_bar(position ="fill")+
+  facet_wrap(~recency_level, ncol=3 )+
+  scale_fill_manual(values = c("yes"="#0bb4ff","no" = alpha("#e2e2e2", 0.3)),labels = c("No", "Yes"))+
+  labs(title = "Time and Age Shape Campaign Success",
+       subtitle = "Distribution of campaign outcomes across age groups and contact recency levels.",
+       x= "Age Group",
+       y= "Proportion of Campaign Outcome (%)",fill= "Campaign Outcome")+
+  theme_minimal()+
+  theme(
+    plot.title =element_text(face= "bold", size=15, hjust=0.5),
+    strip.text =element_text(face= "bold", size=12), 
+    axis.text.x =element_text(hjust = 0.5)
+  )
+
+ggplotly(p)
+```
+
+
+## 3. Insight Storytelling & Recommendations
+
+### 3a. Data Storytelling Through Visuals Designs
+
+#### First Key Finding: Clients with Prior Success and Specific Age Groups Drive the Highest Conversions
+
+```{r}
+plot1<-clean_data%>%
+  group_by(age_group,poutcome)%>%
+  summarise(prop = mean(y=="yes"), .groups="drop")
+
+bar_success<- plot1 %>% filter(poutcome=="success")
+bar_others<- plot1 %>% filter(poutcome!="success")
+color_success <- "#4169E1"
+
+
+plot_result1<-ggplot(data=plot1, aes(x =age_group,y=prop,
+                                     text = paste0("<b>Age Group:</b> ", age_group, "<br>",
+                                                   "<b>Previous Outcome:</b> ", poutcome, "<br>",
+                                                   "<b>Success Rate:</b> ", round(prop * 100, 1), "%")))+
+  geom_bar(data = bar_others, stat= "identity", fill ="gray", width=0.7) +
+  geom_bar(data = bar_success, stat= "identity", fill =color_success, width=0.7) +
+  geom_text(aes(y= prop/2, label = scales::percent(prop, accuracy=1),color =ifelse(poutcome =="success","white","black")),
+            fontface = "bold",size = 4)+
+  facet_wrap(~poutcome, ncol=3,labeller = labeller(poutcome = c("failure"="Failure", "nonexistent"="Nonexistent","success"="Success")))+
+  scale_color_identity()+
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
+  labs(title= "Past Success+Right Age = Highest Conversion",
+    subtitle= "Success rates for 'Failure'/'Nonexistent' are shown in gray, highlighting the standout performance for 'Success'.",
+    x ="Age Group",
+    y ="Success Rate")+
+  theme_minimal(base_size=14) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 18),
+        plot.subtitle = element_text(hjust = 0.5, color = "gray", margin = margin(b = 15)),
+        strip.text = element_text(face = "bold", size = 14),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        legend.position = "none")
+
+ggplotly(plot_result1, tooltip = "text")
+
+
+```
+
+#### Second Key Finding: Longer Call Durations Lead to Significantly Higher Conversion
+
+```{r}
+plot2<-clean_data%>%
+  group_by(duration_group,y)%>%
+  summarise(count=n(), .groups="drop")%>%
+  group_by(duration_group)%>%
+  mutate(prop =count/sum(count))%>%
+  ungroup()
+
+plot2<-plot2%>%
+  mutate(label_text=ifelse(y=="yes", paste0(round(prop * 100, 1),"%"),NA))
+
+plot_result2<-ggplot(plot2,aes(x=duration_group, y=prop, fill=y,
+                               text=paste0("<b>Duration:</b> ", duration_group, "<br>",
+                                           "<b>Outcome:</b> ", ifelse(y == "yes", "Success", "No Response"), "<br>",
+                                           "<b>Proportion:</b> ", round(prop * 100, 1), "%")))+
+  geom_bar(stat = "identity", position = "fill", width = 0.7)+
+  geom_text(aes(label =label_text),position =position_fill(vjust=0.5),color="white",fontface ="bold",size =5,na.rm=T)+
+  scale_y_continuous(labels =scales::percent_format()) +
+  scale_fill_manual(values =c("yes"="#4169E1", "no" =alpha("#f0f0f0",0.5)), guide="none") +
+  scale_x_discrete(labels =c("short"="Short\n(<1.45m)",
+                             "middle-short" ="Middle-Short\n(1.45–3m)",
+                             "middle-long" ="Middle-Long\n(3–5m)",
+                             "long" ="Long\n(>5m)"))+
+  labs(title ="Duration Matters: 3X Subscription Rate on Long Calls",x ="Call Duration Group (seconds)",y ="Proportion of Clients")+
+  theme_minimal(base_size=14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 16),
+    axis.title.x = element_text(face = "bold", margin = margin(t = 10)),
+    axis.text.x = element_text(face = "bold"),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank())
+
+ggplotly(plot_result2, tooltip = "text")
+```
+
+
+### 3b. Interpret The Findings
+
+The strongest pattern appears with previous campaign outcomes, **clients who had a previous success show a 72% success rate**, compared to only 23% for failures and 13% for clients never contacted before.
+Another strong insight is that **longer calls lead to better results**, just 2 minute increase from a call lasting 3–5 minutes to one over 5 minutes may **triples** the conversion rate, **jumping from 10.9% to 29.4%.**
+Clients who subscribed tend to have much longer call durations, with an average of 512 seconds, more than double those who said no.
+Success rates are clearly higher among clients **under 30** and **over 50**, while the **30–50 age group consistently shows the lowest response**, creating a **U-shaped trend across age groups**.
+These findings suggest a potential causal link between both client engagement time and prior success history with their likelihood to subscribe.
+
+### 3c. Make Business Recommendation
+
+Based on the data and visualization insight, I will give two specific recommendation:
+
+  - **Prioritize targeting clients who previously responded positively to campaigns**, especially those **under 30 or over 50 years old.**
+These clients have a conversion rate of 67% - 72%, and the age segments show a U-shaped pattern, where <30 and >50 consistently outperform the 30–50 age group.
+Focus marketing budget and personalization strategies on these segments, build a high potential leads list based on age and past response for future campaigns.
+
+  - **Encourage call agents to extend conversations beyond 5 minutes whenever possible.**
+Clients who spoke for more than 5 minutes converted at 29.4%, nearly 3× higher than those in the 3–5 minute range. 
+It is recommended to set call duration KPIs and give bonuses for longer, high-quality calls, also adjust scripts to support deeper conversations, and promote longer.
+
+
+
